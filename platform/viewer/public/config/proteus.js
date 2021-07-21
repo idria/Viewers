@@ -11,7 +11,7 @@ window.config = {
         qidoRoot: '/api/v1/dicom-web',
         wadoRoot: '/api/v1/dicom-web',
         qidoSupportsIncludeField: true,
-        imageRendering: 'wadors',
+        imageRendering: 'wadouri',
         thumbnailRendering: 'wadors',
         enableStudyLazyLoad: true,
         supportsFuzzyMatching: true,
