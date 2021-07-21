@@ -7,7 +7,7 @@ window.config = {
     dicomWeb: [
       {
         name: 'PROTEUS',
-        wadoUriRoot: '/api/v1/dicom-web',
+        wadoUriRoot: '/api/v1/wado',
         qidoRoot: '/api/v1/dicom-web',
         wadoRoot: '/api/v1/dicom-web',
         qidoSupportsIncludeField: true,
