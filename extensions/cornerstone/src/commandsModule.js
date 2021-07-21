@@ -7,8 +7,6 @@ import { getEnabledElement, setEnabledElement } from './state';
 import CornerstoneViewportDownloadForm from './CornerstoneViewportDownloadForm';
 const scroll = cornerstoneTools.import('util/scroll');
 
-import proteusPrint from './print';
-
 const { studyMetadataManager } = OHIF.utils;
 const { setViewportSpecificData } = OHIF.redux.actions;
 
@@ -410,13 +408,7 @@ const commandsModule = ({ servicesManager }) => {
       commandFn: actions.setWindowLevel,
       storeContexts: ['viewports'],
       options: {},
-    },
-    // EXTRA PROTEUS
-    print: {
-      commandFn: proteusPrint,
-      storeContexts: ['viewports'],
-      options: {},
-    },
+    }
   };
 
   return {
