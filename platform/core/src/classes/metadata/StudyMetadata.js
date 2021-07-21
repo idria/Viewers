@@ -12,8 +12,9 @@ import { isImage } from '../../utils/isImage';
 import { isDisplaySetReconstructable, isSpacingUniform } from '../../utils/isDisplaySetReconstructable';
 import errorHandler from '../../errorHandler';
 import isLowPriorityModality from '../../utils/isLowPriorityModality';
+import getXHRRetryRequestHook from '../../utils/xhrRetryRequestHook';
 
-export class StudyMetadata extends Metadata {
+class StudyMetadata extends Metadata {
   constructor(data, uid) {
     super(data, uid);
     // Initialize Private Properties
@@ -226,6 +227,56 @@ export class StudyMetadata extends Metadata {
     displaySets.map(displaySet => this._derivedDisplaySets.push(displaySet));
   }
 
+
+  /**
+   * Returns the source display set of the derivated display set.
+   * @param {object} derivatedDisplaySet
+   * @param {array[StudyMetadata]} studies
+   * @return {object} source display set.
+   */
+  static getReferencedDisplaySet(derivatedDisplaySet, studies) {
+    let allDisplaySets = [];
+
+    studies.forEach(study => {
+      allDisplaySets = allDisplaySets.concat(study.displaySets);
+    });
+
+    const otherDisplaySets = allDisplaySets.filter(
+      ds => ds.displaySetInstanceUID !== derivatedDisplaySet.displaySetInstanceUID
+    );
+
+    const { metadata } = derivatedDisplaySet;
+
+    let referencedSeriesInstanceUIDs = _findReferencedSeriesInstanceUIDsFromSourceImageSequence
+    (metadata, otherDisplaySets);
+
+    let noReferencedSeriesAvailable = !referencedSeriesInstanceUIDs ||
+      referencedSeriesInstanceUIDs.length === 0;
+    if (noReferencedSeriesAvailable) {
+      referencedSeriesInstanceUIDs =
+        _findReferencedSeriesInstanceUIDsFromReferencedSeriesSequence
+          (metadata);
+    }
+
+    noReferencedSeriesAvailable = !referencedSeriesInstanceUIDs ||
+      referencedSeriesInstanceUIDs.length === 0;
+    if (noReferencedSeriesAvailable) {
+      referencedSeriesInstanceUIDs =
+      _findReferencedSeriesInstanceUIDsFromReferencedImageSequence
+          (metadata, otherDisplaySets);
+    }
+
+    const referencedSeriesAvailable = referencedSeriesInstanceUIDs &&
+      referencedSeriesInstanceUIDs.length !== 0;
+    if (referencedSeriesAvailable) {
+      const referencedDisplaySet = otherDisplaySets.find(ds =>
+        referencedSeriesInstanceUIDs.includes(ds.SeriesInstanceUID)
+      );
+      ;
+      return referencedDisplaySet;
+    }
+  };
+
   /**
    * Returns a list of derived datasets in the study, filtered by the given filter.
    * @param {object} filter An object containing search filters
@@ -252,20 +303,7 @@ export class StudyMetadata extends Metadata {
     if (referencedSeriesInstanceUID) {
       filteredDerivedDisplaySets = filteredDerivedDisplaySets.filter(
         displaySet => {
-          if (!displaySet.metadata.ReferencedSeriesSequence) {
-            return false;
-          }
-
-          const ReferencedSeriesSequence = Array.isArray(
-            displaySet.metadata.ReferencedSeriesSequence
-          )
-            ? displaySet.metadata.ReferencedSeriesSequence
-            : [displaySet.metadata.ReferencedSeriesSequence];
-
-          return ReferencedSeriesSequence.some(
-            ReferencedSeries =>
-              ReferencedSeries.SeriesInstanceUID === referencedSeriesInstanceUID
-          );
+          return StudyMetadata.getReferencedDisplaySet(displaySet, [this]).SeriesInstanceUID === referencedSeriesInstanceUID;
         }
       );
     }
@@ -273,7 +311,7 @@ export class StudyMetadata extends Metadata {
     if (referencedFrameOfReferenceUID) {
       filteredDerivedDisplaySets = filteredDerivedDisplaySets.filter(
         displaySet =>
-          displaySet.ReferencedFrameOfReferenceUID ===
+          displaySet.FrameOfReferenceUID ===
           referencedFrameOfReferenceUID
       );
     }
@@ -823,7 +861,7 @@ const makeDisplaySet = (series, instances) => {
     imageSet.sortByImagePositionPatient();
 
     // check if the spacing is uniform and update isReconstructable
-    const datasetIs4D = displayReconstructableInfo.warningIssues.find
+    const datasetIs4D = displayReconstructableInfo.reconstructionIssues.find
       (issue => issue === ReconstructionIssues.DATASET_4D);
     displaySpacingInfo = isSpacingUniform(imageSet.images, datasetIs4D);
     imageSet.isReconstructable = displaySpacingInfo.isUniform;
@@ -837,9 +875,9 @@ const makeDisplaySet = (series, instances) => {
 
   if (!imageSet.displayReconstructableInfo) {
     // It is not reconstrabale Save type of warning
-    imageSet.warningIssues = displaySpacingInfo ?
-      displayReconstructableInfo.warningIssues.concat(displaySpacingInfo.warningIssues) :
-        displayReconstructableInfo.warningIssues;
+    imageSet.reconstructionIssues = displaySpacingInfo ?
+      displayReconstructableInfo.reconstructionIssues.concat(displaySpacingInfo.reconstructionIssues) :
+        displayReconstructableInfo.reconstructionIssues;
   }
 
   return imageSet;
@@ -902,6 +940,7 @@ function _getDisplaySetFromSopClassModule(
     url: study.getData().wadoRoot,
     headers,
     errorInterceptor,
+    requestHooks: [getXHRRetryRequestHook()],
   });
 
   let displaySet = plugin.getDisplaySetFromSeries(
@@ -916,3 +955,147 @@ function _getDisplaySetFromSopClassModule(
   }
   return displaySet;
 }
+
+/**
+  * Returns the referenced series instance UIDs by searching the information in the
+  * ReferencedSeriesSequence.
+  * @param {object} derivatedDisplaySet.metadata
+  * @return {array[string]} referenced series instance UIDs.
+  */
+function _findReferencedSeriesInstanceUIDsFromReferencedSeriesSequence (
+  metadata,
+) {
+  if (!metadata.ReferencedSeriesSequence) {
+    return;
+  }
+
+  let referencedSeriesInstanceUIDs;
+  const ReferencedSeriesSequence = _toArray(
+    metadata.ReferencedSeriesSequence
+  );
+
+  referencedSeriesInstanceUIDs = ReferencedSeriesSequence.map(
+    ReferencedSeries => ReferencedSeries.SeriesInstanceUID
+  );
+
+  return referencedSeriesInstanceUIDs;
+};
+
+/**
+  * Returns the referenced series instance UIDs by searching the information in the
+  * ReferencedImageSequence.
+  * @param {object} derivatedDisplaySet.metadata
+  * @param {array[object]} displaysets
+  * @return {array[string]} referenced series instance UIDs.
+  */
+function _findReferencedSeriesInstanceUIDsFromReferencedImageSequence (
+  metadata,
+  displaySets
+) {
+  if (!metadata.ReferencedImageSequence) {
+    return;
+  }
+
+  let referencedSeriesInstanceUIDs;
+  const referencedImageArray = _toArray(metadata.ReferencedImageSequence);
+  for (let i = 0; i < referencedImageArray.length; i++) {
+    const { ReferencedSOPInstanceUID } = referencedImageArray[i];
+    if (!ReferencedSOPInstanceUID) {
+      continue;
+    }
+
+    referencedSeriesInstanceUIDs = _findReferencedSeriesInstanceUIDsFromSOPInstanceUID(
+      displaySets,
+      ReferencedSOPInstanceUID
+    );
+
+    if (referencedSeriesInstanceUIDs && referencedSeriesInstanceUIDs.length !== 0) {
+      break;
+    }
+  }
+
+  return referencedSeriesInstanceUIDs;
+};
+
+/**
+  * Returns the referenced series instance UIDs by searching the information in the
+  * SourceImageSequence.
+  * @param {object} derivatedDisplaySet.metadata
+  * @param {array[object]} displaysets
+  * @return {array[string]} referenced series instance UIDs.
+  */
+function _findReferencedSeriesInstanceUIDsFromSourceImageSequence (
+  metadata,
+  displaySets
+) {
+  let SourceImageSequence;
+
+  if (metadata.SourceImageSequence) {
+    SourceImageSequence = metadata.SourceImageSequence;
+  } else {
+    const { PerFrameFunctionalGroupsSequence } = metadata;
+    const firstFunctionalGroups = _toArray(
+      PerFrameFunctionalGroupsSequence
+    )[0];
+    if (firstFunctionalGroups) {
+      const { DerivationImageSequence } = firstFunctionalGroups;
+      SourceImageSequence = DerivationImageSequence;
+    }
+  }
+
+  if (!SourceImageSequence) {
+    return;
+  }
+
+  const sourceImageArray = _toArray(SourceImageSequence);
+
+  let referencedSeriesInstanceUIDs;
+  for (let i = 0; i < sourceImageArray.length; i++) {
+    const { ReferencedSOPInstanceUID } = sourceImageArray[i];
+    referencedSeriesInstanceUIDs = _findReferencedSeriesInstanceUIDsFromSOPInstanceUID(
+      displaySets,
+      ReferencedSOPInstanceUID
+    );
+    if (referencedSeriesInstanceUIDs && referencedSeriesInstanceUIDs.length !== 0) {
+      break;
+    }
+  }
+
+  return referencedSeriesInstanceUIDs;
+};
+
+/**
+  * Returns the referenced series instance UIDs by searching the information in the
+  * SOPInstanceUID of the displaySets.
+  * @param {array[object]} displaysets
+  * @param {string} SOPInstanceUID
+  * @return {array[string]} referenced series instance UIDs.
+  */
+function _findReferencedSeriesInstanceUIDsFromSOPInstanceUID (
+  displaySets,
+  SOPInstanceUID
+) {
+  const imageSets = displaySets.filter(ds => ds instanceof ImageSet);
+
+  for (let i = 0; i < imageSets.length; i++) {
+    const { images } = imageSets[i];
+    if (!images) {
+      continue;
+    }
+    for (let j = 0; j < images.length; j++) {
+      const image = images[j];
+      if (!image) {
+        continue;
+      }
+      if (image.SOPInstanceUID === SOPInstanceUID) {
+        return [image.getData().metadata.SeriesInstanceUID];
+      }
+    }
+  }
+};
+
+function _toArray(arrayOrObject) {
+  return Array.isArray(arrayOrObject) ? arrayOrObject : [arrayOrObject];
+}
+
+export {StudyMetadata};
